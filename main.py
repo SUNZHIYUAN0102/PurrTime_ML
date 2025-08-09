@@ -77,15 +77,9 @@ X_train, X_val, y_train, y_val = train_test_split(
     X_temp, y_temp, test_size=0.2, random_state=42, stratify=y_temp
 )
 
-# 数据标准化
-# scaler = StandardScaler()
-# X_train = scaler.fit_transform(X_train)
-# X_val = scaler.transform(X_val)
-# X_test = scaler.transform(X_test)
-
 target_counts = {
-    0: 9000,  # Active
-    1: 8500,  # Eating
+    0: 7000,  # Active
+    1: 7200,  # Eating
     # 2: 5000,  # Grooming
     # 3: 10000   # Inactive
 }
@@ -200,7 +194,7 @@ class FocalLoss(nn.Module):
 
 class_weights_tensor = torch.tensor(class_weights, dtype=torch.float32)
 
-focal_criterion = FocalLoss(alpha=class_weights_tensor, gamma=1.5, reduction='mean')
+focal_criterion = FocalLoss(alpha=class_weights_tensor, gamma=2, reduction='mean')
 
 criterion = focal_criterion
 
@@ -219,7 +213,7 @@ train_accuracies = []
 val_accuracies = []
 
 best_val_acc = 0.0
-early_stop_patience = 40  # 适中的耐心值
+early_stop_patience = 20  # 适中的耐心值
 patience_counter = 0
 min_epochs = 15  # 减少最少训练轮数
 
@@ -268,7 +262,6 @@ for epoch in range(100):  # 减少最大epochs
             correct_val += (predicted == y_batch).sum().item()
             total_val += y_batch.size(0)
 
-
     val_accuracy = correct_val / total_val
     avg_train_loss = total_train_loss / len(train_loader)
     avg_val_loss = total_val_loss / len(val_loader) if len(val_loader) > 0 else 0
@@ -282,7 +275,7 @@ for epoch in range(100):  # 减少最大epochs
     if val_accuracy > best_val_acc and overfitting_gap < 0.20:  # 放宽过拟合限制
         best_val_acc = val_accuracy
         patience_counter = 0
-        # torch.save(model.state_dict(), "best_simple_model.pt")
+        torch.save(model.state_dict(), "best_simple_model.pt")
     else:
         patience_counter += 1
 
@@ -305,9 +298,8 @@ for epoch in range(100):  # 减少最大epochs
         
         if patience_counter >= early_stop_patience:
             print(f"Early stopping at epoch {epoch + 1}, best val acc: {best_val_acc:.2%}")
-            # break
+            break
         
-torch.save(model.state_dict(), "best_simple_model.pt")
 # 加载最佳模型进行测试
 model.load_state_dict(torch.load("best_simple_model.pt"))
 
