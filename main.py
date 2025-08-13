@@ -1,3 +1,4 @@
+from typing import Counter
 from matplotlib import ticker
 import numpy as np
 import pandas as pd
@@ -13,46 +14,11 @@ import torch.nn.functional as F
 from sklearn.metrics import classification_report, f1_score, confusion_matrix
 import seaborn as sns
 
-from model import BalancedClassifier
+from LSTM import ImprovedLSTMClassifier
 
 # === 1. 加载并预处理数据 ===
-df = pd.read_csv("collar_data6.csv")
-
-target_classes = [
-    {"Behaviour": "Inactive", "Count": 15000},
-    # {"Behaviour": "Grooming", "Count": 9000},
-    # {"Behaviour": "Active", "Count": 6000}
-]
-
-# 处理采样
-dfs = []
-for item in target_classes:
-    label = item["Behaviour"]
-    target_count = item["Count"]
-    class_df = df[df["Behaviour"] == label]
-    current_count = len(class_df)
-    
-    if current_count > target_count:
-        # 欠采样
-        class_df = class_df.sample(n=target_count, random_state=42)
-    # elif current_count < target_count:
-    #     # 过采样（有放回）
-    #     additional = class_df.sample(n=target_count - current_count, replace=True, random_state=42)
-    #     class_df = pd.concat([class_df, additional])
-    
-    dfs.append(class_df)
-
-# 保留未处理类别的数据（如果有）
-processed_labels = {item["Behaviour"] for item in target_classes}
-unprocessed_df = df[~df["Behaviour"].isin(processed_labels)]
-dfs.append(unprocessed_df)
-
-# 合并 & 打乱
-df = pd.concat(dfs).sample(frac=1, random_state=42).reset_index(drop=True)
-
-# 结果打印
-print("✅ 数据预处理完成！")
-print(df['Behaviour'].value_counts())
+df = pd.read_csv("collar_data5.csv")
+df = df.sort_values(["Cat_id", "Timestamp"]).reset_index(drop=True)
 
 feature_cols = [
     'X_Mean','X_Min','X_Max','X_Sum','X_sd','X_Skew','X_Kurt',
@@ -67,89 +33,160 @@ y = df["Behaviour"].values
 
 # 标签编码
 label_encoder = LabelEncoder()
-y = label_encoder.fit_transform(y)
+df["y_enc"] = label_encoder.fit_transform(df["Behaviour"])
 
-# === 2. 分层拆分数据集 ===
-X_temp, X_test, y_temp, y_test = train_test_split(
-    X, y, test_size=0.2, random_state=42, stratify=y
-)
-X_train, X_val, y_train, y_val = train_test_split(
-    X_temp, y_temp, test_size=0.2, random_state=42, stratify=y_temp
-)
+cat_col = 'Cat_id'
+df_no_jellyb = df[df[cat_col] != 'JellyB']
 
-target_counts = {
-    0: 7000,  # Active
-    1: 7200,  # Eating
-    # 2: 5000,  # Grooming
-    # 3: 10000   # Inactive
-}
+# 所有猫 ID 列表
+all_cats = df_no_jellyb[cat_col].unique()
 
-# 收集采样后的数据
-X_resampled = []
-y_resampled = []
+# 随机打乱（固定种子保证可复现）
+rng = np.random.default_rng(42)
+rng.shuffle(all_cats)
 
-for label in np.unique(y_train):
-    idx = np.where(y_train == label)[0]
-    current_count = len(idx)
+# 划分：7 只训练，2 只验证，剩下 2 只测试
+train_cats = all_cats[:7]
+val_cats   = all_cats[7:9]
+test_cats  = all_cats[9:11]
 
-    if label in target_counts:
-        target_count = target_counts[label]
-        if current_count > target_count:
-            # 欠采样
-            sampled_idx = np.random.choice(idx, size=target_count, replace=False)
-        else:
-            # 过采样（有放回）
-            sampled_idx = np.random.choice(idx, size=target_count, replace=True)
-    else:
-        # 不进行采样，保留原始样本
-        sampled_idx = idx
-    
-    X_resampled.append(X_train[sampled_idx])
-    y_resampled.append(y_train[sampled_idx])
+print("Train cats:", train_cats)
+print("Val cats:", val_cats)
+print("Test cats:", test_cats)
 
-# 合并并打乱
-X_train = np.vstack(X_resampled)
-y_train = np.hstack(y_resampled)
-
-shuffle_idx = np.random.permutation(len(X_train))
-X_train = X_train[shuffle_idx]
-y_train = y_train[shuffle_idx]
-# 打印采样后的数据分布
-print("✅ 采样后的训练数据分布：")
-for i, count in enumerate(np.bincount(y_train)):
-    print(f"{label_encoder.classes_[i]}: {count}")
+# 建立索引掩码（基于原 df 行顺序）
+mask_train = (df[cat_col].isin(train_cats)) & (df[cat_col] != 'JellyB')
+mask_val   = (df[cat_col].isin(val_cats))
+mask_test  = (df[cat_col].isin(test_cats))
 
 scaler = StandardScaler()
-X_train = scaler.fit_transform(X_train)
-X_val = scaler.transform(X_val)
-X_test = scaler.transform(X_test)
+scaler.fit(df.loc[mask_train, feature_cols].values)
+
+X_all = scaler.transform(df[feature_cols].values)
+y_all = df["y_enc"].values
+cats_all = df[cat_col].values
+
+
+def make_seq_windows(X, y, cats, window_size=10, stride=1, label_mode="majority", min_purity=0.7):
+    Xs, ys = [], []
+    for cat in np.unique(cats):
+        idx = np.where(cats == cat)[0]
+        Xi, yi = X[idx], y[idx]
+        n = len(idx)
+        for s in range(0, n - window_size + 1, stride):
+            segy = yi[s:s+window_size]
+            vals, cnts = np.unique(segy, return_counts=True)
+            maj = vals[np.argmax(cnts)]
+            purity = cnts.max() / window_size
+            if purity < min_purity:   # 丢掉过渡窗口
+                continue
+            Xs.append(Xi[s:s+window_size])
+            ys.append(maj)
+    return np.array(Xs, np.float32), np.array(ys, np.int64)
+
+
+X_train_seq, y_train = make_seq_windows(
+    X_all[mask_train], y_all[mask_train], cats_all[mask_train],
+    window_size=12, stride=4
+)
+X_val_seq,   y_val   = make_seq_windows(
+    X_all[mask_val], y_all[mask_val], cats_all[mask_val],
+    window_size=12, stride=4
+)
+X_test_seq,  y_test  = make_seq_windows(
+    X_all[mask_test], y_all[mask_test], cats_all[mask_test],
+    window_size=12, stride=4
+)
+
+counter = Counter(y_train)
+total = len(y_train)
+
+print("📊 窗口级训练集类别分布：")
+for label_idx in sorted(counter.keys()):
+    count = counter[label_idx]
+    ratio = count / total * 100
+    print(f"{label_encoder.classes_[label_idx]}: {count} ({ratio:.2f}%)")
+
+
+def balance_windows_offline(X_seq, y, mode="cap_majority", cap_per_class=3000, target_per_class=None, seed=42):
+    """
+    X_seq: (N, S, F)
+    y:     (N,)
+    mode:
+      - "cap_majority": 对每一类最多保留 cap_per_class（欠采样多数类）
+      - "target_equal": 把每一类都采样到 target_per_class（少的过采样，多的欠采样）
+    """
+    rng = np.random.default_rng(seed)
+
+    X_out, y_out = [], []
+    classes = np.unique(y)
+
+    if mode == "cap_majority":
+        for c in classes:
+            idx = np.where(y == c)[0]
+            if len(idx) > cap_per_class:
+                idx = rng.choice(idx, size=cap_per_class, replace=False)
+            X_out.append(X_seq[idx])
+            y_out.append(y[idx])
+
+    elif mode == "target_equal":
+        if target_per_class is None:
+            raise ValueError("target_per_class must be set when mode='target_equal'")
+        for c in classes:
+            idx = np.where(y == c)[0]
+            if len(idx) >= target_per_class:
+                idx = rng.choice(idx, size=target_per_class, replace=False)
+            else:
+                extra = rng.choice(idx, size=target_per_class - len(idx), replace=True)  # 过采样
+                idx = np.concatenate([idx, extra], axis=0)
+            X_out.append(X_seq[idx])
+            y_out.append(y[idx])
+    else:
+        raise ValueError("Unknown mode")
+
+    Xb = np.concatenate(X_out, axis=0)
+    yb = np.concatenate(y_out, axis=0)
+
+    # 打乱
+    perm = rng.permutation(len(yb))
+    return Xb[perm], yb[perm]
+
+# 用法1：对多数类做“最多8000窗口”的欠采样
+X_train_seq, y_train = balance_windows_offline(
+    X_train_seq, y_train,
+    # mode="target_equal", target_per_class=5000
+)
+counter = Counter(y_train)
+total = len(y_train)
+
+print("📊 采样训练集类别分布：")
+for label_idx in sorted(counter.keys()):
+    count = counter[label_idx]
+    ratio = count / total * 100
+    print(f"{label_encoder.classes_[label_idx]}: {count} ({ratio:.2f}%)")
 
 # === 3. 创建 Dataset 和 DataLoader ===
-class BehaviorDataset(Dataset):
-    def __init__(self, X, y):
-        self.X = torch.tensor(X, dtype=torch.float32)
-        self.y = torch.tensor(y, dtype=torch.long)
-    
+class BehaviorSeqDataset(Dataset):
+    def __init__(self, X_seq, y):
+        self.X = torch.from_numpy(X_seq)          # (N, S, F), float32
+        self.y = torch.from_numpy(y).long()       # (N,)
     def __len__(self):
-        return len(self.X)
-    
+        return len(self.y)
     def __getitem__(self, idx):
         return self.X[idx], self.y[idx]
 
-train_dataset = BehaviorDataset(X_train, y_train)
-val_dataset = BehaviorDataset(X_val, y_val)
-test_dataset = BehaviorDataset(X_test, y_test)
+train_dataset = BehaviorSeqDataset(X_train_seq, y_train)
+val_dataset   = BehaviorSeqDataset(X_val_seq,   y_val)
+test_dataset  = BehaviorSeqDataset(X_test_seq,  y_test)
 
-# 使用更大的batch size减少噪声
-train_loader = DataLoader(train_dataset, batch_size=128, shuffle=True, drop_last=True)
-val_loader = DataLoader(val_dataset, batch_size=128, shuffle=True, drop_last=True)
-test_loader = DataLoader(test_dataset, batch_size=128, shuffle=False, drop_last=False)
+train_loader = DataLoader(train_dataset, batch_size=64, shuffle=True,  drop_last=True)
+val_loader   = DataLoader(val_dataset,   batch_size=64, shuffle=False, drop_last=False)
+test_loader  = DataLoader(test_dataset,  batch_size=64, shuffle=False, drop_last=False)
 # === 4. 平衡的神经网络模型 ===
 
 input_dim = len(feature_cols)
 num_classes = len(label_encoder.classes_)
-model = BalancedClassifier(input_dim, num_classes)
-
+model = ImprovedLSTMClassifier(input_dim=input_dim, num_classes=num_classes)
 print(f"模型参数数量: {sum(p.numel() for p in model.parameters() if p.requires_grad)}")
 
 # === 5. 损失函数和优化器 ===
@@ -194,12 +231,19 @@ class FocalLoss(nn.Module):
 
 class_weights_tensor = torch.tensor(class_weights, dtype=torch.float32)
 
-focal_criterion = FocalLoss(alpha=class_weights_tensor, gamma=2, reduction='mean')
+beta = 0.999
+counts = np.bincount(y_train)
+eff_num = (1 - np.power(beta, counts)) / (1 - beta)
+alpha = eff_num.sum() / (eff_num + 1e-8)
+alpha = alpha / alpha.sum()  # 归一化到和为1
+alpha = torch.tensor(alpha, dtype=torch.float32)
+
+focal_criterion = FocalLoss(alpha=alpha, gamma=2, reduction='mean')
 
 criterion = focal_criterion
 
 # 平衡的学习率和正则化
-optimizer = torch.optim.AdamW(model.parameters(), lr=0.001, weight_decay=1e-4, amsgrad=True)
+optimizer = torch.optim.AdamW(model.parameters(), lr=0.0005, weight_decay=1e-4, amsgrad=True)
 
 # 温和的学习率调度
 scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(

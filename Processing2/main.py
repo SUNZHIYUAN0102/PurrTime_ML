@@ -1,6 +1,5 @@
 import pandas as pd
 
-# === 1. 读取原始数据 ===
 df = pd.read_csv("original_data.csv", parse_dates=["Timestamp"])
 meta = pd.read_csv("Model_Meta.csv")
 meta["Ob_Start"] = pd.to_datetime("2021-06-30 " + meta["Ob_Start"])
@@ -24,7 +23,7 @@ print(f"过滤后行数: {len(filtered_df)}")
 df = filtered_df.copy()
 
 #Part 1, 保留Position为Collar的行
-df = df[df["Position"] == "Harness"]
+df = df[df["Position"] == "Collar"]
 
 class_counts = df["Behaviour"].value_counts()
 class_counts.to_csv("collar_class_counts1.csv")
@@ -32,8 +31,17 @@ print("✅ 合并后的类别统计已保存为 collar_class_counts1.csv")
 df.to_csv("collar_data1.csv", index=False)
 print("✅ 合并后的数据已保存为 collar_data1.csv")
 
-#Part2, 移除Behaviour中Other开头的行
+#Part2, 移除某些类别
 df = df[~df["Behaviour"].str.startswith("Other")]
+df = df[df["Behaviour"].isin([
+    "Inactive_Lying.Crouch",
+    "Inactive_Sitting.Stationary",
+    "Inactive_Standing.Stationary",
+    "Maintenance_Grooming",
+    "Maintenance_Nutrition.Eating",
+    "Active_Walking",
+    "Active_Trotting"
+])]
 class_counts = df["Behaviour"].value_counts()
 class_counts.to_csv("collar_class_counts2.csv")
 print("✅ 合并后的类别统计已保存为 collar_class_counts2.csv")
@@ -49,80 +57,37 @@ df.to_csv("collar_data3.csv", index=False)
 print("✅ 合并后的数据已保存为 collar_data3.csv")
 
 #Part 4, 合并行为类别
-def merge_behaviour(beh):
-    if beh.startswith("Maintenance_Littering."):
-        return "Maintenance_Littering"
-    if beh.startswith("Inactive_Sitting."):
-        return "Inactive_Sitting"
-    elif beh.startswith("Inactive_Lying."):
-        return "Inactive_Lying"
-    elif beh.startswith("Inactive_Standing."):
-        return "Inactive_Standing"
-    elif beh in ["Active_Rubbing","Active_Jumping.Vertical","Active_Jumping.Horizontal","Active_Climbing","Active_Playfight.Fighting", "Active_Playfight.Playing"]:
-        return "Active_Other"
-    elif beh in ["Maintenance_Scratching","Maintenance_Shake.Body","Maintenance_Shake.Head"]:
-        return "Maintenance_Other"
-    elif beh == "Active_Trotting":
-        return "Active_Walking"
-    else:
-        return beh
-    
-df["Behaviour"] = df["Behaviour"].apply(merge_behaviour)
+# df = df.loc[:, ~df.columns.str.startswith("ODBA")]
 
-df["Behaviour"] = df["Behaviour"].replace("Maintenance_Littering", "Maintenance_Other")
-df = df.loc[:, ~df.columns.str.startswith("ODBA")]
-
-class_counts = df["Behaviour"].value_counts()
-class_counts.to_csv("collar_class_counts4.csv")
-print("✅ 合并后的类别统计已保存为 collar_class_counts4.csv")
-df.to_csv("collar_data4.csv", index=False)
-print("✅ 合并后的数据已保存为 collar_data4.csv")
+# class_counts = df["Behaviour"].value_counts()
+# class_counts.to_csv("collar_class_counts4.csv")
+# print("✅ 合并后的类别统计已保存为 collar_class_counts4.csv")
+# df.to_csv("collar_data4.csv", index=False)
+# print("✅ 合并后的数据已保存为 collar_data4.csv")
 
 #Part 5, 更换类别名称
 def rename_behaviour(beh):
-    if beh == "Inactive_Lying":
-        return "Lying"
-    elif beh == "Inactive_Sitting":
-        return "Sitting"
-    elif beh == "Inactive_Standing":
-        return "Standing"
+    if beh == "Inactive_Lying.Crouch":
+        return "Inactive"
+    elif beh == "Inactive_Sitting.Stationary":
+        return "Inactive"
+    elif beh == "Inactive_Standing.Stationary":
+        return "Inactive"
     elif beh == "Maintenance_Grooming":
-        return "Grooming"
+        return "Maintenance"
     elif beh == "Maintenance_Nutrition.Eating":
-        return "Eating"
-    elif beh == "Maintenance_Other":
         return "Maintenance"
     elif beh == "Active_Walking":
-        return "Walking"
-    elif beh == "Active_Other":
+        return "Active"
+    elif beh == "Active_Trotting":
         return "Active"
     else:
         return beh
 
 df["Behaviour"] = df["Behaviour"].apply(rename_behaviour)
-# 移除behaviour为Maintenance和Active的行
-df = df[~df["Behaviour"].isin(["Maintenance", "Active"])]
 class_counts = df["Behaviour"].value_counts()
 class_counts.to_csv("collar_class_counts5.csv")
 print("✅ 合并后的类别统计已保存为 collar_class_counts5.csv")
 df.to_csv("collar_data5.csv", index=False)
 print("✅ 合并后的数据已保存为 collar_data5.csv")
-
-
-#part 6, converge behaviours
-def converge_behaviour(beh):
-    if beh in ["Sitting", "Standing", "Lying"]:
-        return "Inactive"
-    elif beh == "Walking":
-        return "Active"
-    else:
-        return beh
-    
-    
-df["Behaviour"] = df["Behaviour"].apply(converge_behaviour)
-class_counts = df["Behaviour"].value_counts()
-class_counts.to_csv("collar_class_counts6.csv")
-print("✅ 合并后的类别统计已保存为 collar_class_counts6.csv")
-df.to_csv("collar_data6.csv", index=False)
-print("✅ 合并后的数据已保存为 collar_data6.csv")
     
