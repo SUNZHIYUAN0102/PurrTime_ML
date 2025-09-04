@@ -35,19 +35,20 @@ import torch.nn as nn
 #     def forward(self, x):
 #         return self.net(x)
 
-import torch.nn as nn
 
 class BalancedClassifier(nn.Module):
     def __init__(self, input_dim, num_classes):
         super().__init__()
         self.net = nn.Sequential(
-            nn.Linear(input_dim,32),
-            nn.SiLU(),          # 或 nn.ReLU()
-            nn.Dropout(0.15),
+            nn.Linear(input_dim, 32),
+            nn.BatchNorm1d(32),   # 🔹 BatchNorm1d for stability
+            nn.SiLU(),
+            nn.Dropout(0.3),
 
             nn.Linear(32, 16),
+            nn.BatchNorm1d(16),   # 🔹 BatchNorm1d here too
             nn.SiLU(),
-            nn.Dropout(0.10),
+            nn.Dropout(0.1),
 
             nn.Linear(16, num_classes)
         )

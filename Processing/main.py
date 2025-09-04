@@ -23,7 +23,7 @@ print(f"过滤后行数: {len(filtered_df)}")
 
 df = filtered_df.copy()
 
-#Part 1, 保留Position为Collar的行
+#Part 1, 保留Position为Harness的行
 df = df[df["Position"] == "Harness"]
 
 class_counts = df["Behaviour"].value_counts()

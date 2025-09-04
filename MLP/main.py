@@ -16,7 +16,7 @@ import seaborn as sns
 from model import BalancedClassifier
 
 # === 1. 加载并预处理数据 ===
-df = pd.read_csv("collar_data6.csv")
+df = pd.read_csv("harness.csv")
 
 target_classes = [
     {"Behaviour": "Inactive", "Count": 30000},
@@ -50,12 +50,18 @@ df = pd.concat(dfs).sample(frac=1, random_state=42).reset_index(drop=True)
 print("✅ 数据预处理完成！")
 print(df['Behaviour'].value_counts())
 
+# feature_cols = [
+#     'X_Mean','X_Min','X_Max','X_Sum','X_sd','X_Skew','X_Kurt',
+#     'Y_Mean','Y_Min','Y_Max','Y_Sum','Y_sd','Y_Skew','Y_Kurt',
+#     'Z_Mean','Z_Min','Z_Max','Z_Sum','Z_sd','Z_Skew','Z_Kurt',
+#     'VM_Mean','VM_Min','VM_Max','VM_Sum','VM_sd','VM_Skew','VM_Kurt',
+#     'Cor_XY','Cor_XZ','Cor_YZ'
+# ]
+
 feature_cols = [
-    'X_Mean','X_Min','X_Max','X_Sum','X_sd','X_Skew','X_Kurt',
-    'Y_Mean','Y_Min','Y_Max','Y_Sum','Y_sd','Y_Skew','Y_Kurt',
-    'Z_Mean','Z_Min','Z_Max','Z_Sum','Z_sd','Z_Skew','Z_Kurt',
-    'VM_Mean','VM_Min','VM_Max','VM_Sum','VM_sd','VM_Skew','VM_Kurt',
-    'Cor_XY','Cor_XZ','Cor_YZ'
+    'X_Mean','X_Min','X_Max','X_Sum',
+    'Y_Mean','Y_Min','Y_Max','Y_Sum',
+    'Z_Mean','Z_Min','Z_Max','Z_Sum',
 ]
 
 X = df[feature_cols].values
@@ -75,7 +81,7 @@ df_no_jellyb = df[df[cat_col] != 'JellyB']
 all_cats = df_no_jellyb[cat_col].unique()
 
 # 随机打乱（固定种子保证可复现）
-rng = np.random.default_rng(55)
+rng = np.random.default_rng(66)
 rng.shuffle(all_cats)
 
 # 划分：6 只训练，2 只验证，剩下 2 只测试
@@ -103,7 +109,7 @@ X_test = df_no_jellyb.loc[test_mask, feature_cols].values
 y_test = label_encoder.transform(df_no_jellyb.loc[test_mask, "Behaviour"].values)
 
 target_counts = {
-    # 0: 7500,  # Active
+    0: 3000,  # Active
     # 1: 8000,  # Eating
     # 2: 10000,  # Grooming
     # 3: 15000   # Inactive
@@ -222,14 +228,14 @@ beta = 0.999  # 越接近1，越强调小类
 effective_num = 1.0 - np.power(beta, counts)
 weights = (1.0 - beta) / np.maximum(effective_num, 1e-12)  # 大约 ∝ 1/(1-β^n)
 weights = weights / weights.mean()  # 归一化到均值=1
-class_weights_tensor = torch.tensor(class_weights, dtype=torch.float32)
+class_weights_tensor = torch.tensor(weights, dtype=torch.float32)
 
-focal_criterion = FocalLoss(alpha=class_weights_tensor, gamma=3, reduction='mean')
+focal_criterion = FocalLoss(alpha=class_weights_tensor, gamma=2, reduction='mean')
 
 criterion = focal_criterion
 
 # 平衡的学习率和正则化
-optimizer = torch.optim.AdamW(model.parameters(), lr=0.0005, weight_decay=1e-3, amsgrad=True)
+optimizer = torch.optim.AdamW(model.parameters(), lr=0.0005, weight_decay=3e-3, amsgrad=True)
 
 # 温和的学习率调度
 scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
